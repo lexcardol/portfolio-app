@@ -512,10 +512,11 @@ const PROXIES=[
 ];
 
 // ── FORMAT ────────────────────────────────────────────────────
-const euro=n=>new Intl.NumberFormat('nl-NL',{style:'currency',currency:'EUR',minimumFractionDigits:2}).format(n);
-const pct=n=>(n>=0?'+':'')+n.toFixed(2)+'%';
-const sc=n=>n>=0?'pos':'neg';
-const r2=n=>Math.round(n*100)/100;
+const euro=n=>{if(isNaN(n)||n===null||n===undefined)return'—';return new Intl.NumberFormat('nl-NL',{style:'currency',currency:'EUR',minimumFractionDigits:2}).format(n);}
+const pct=n=>{if(isNaN(n)||n===null||n===undefined)return'—';return(n>=0?'+':'')+n.toFixed(2)+'%';}
+const sc=n=>(isNaN(n)||n>=0)?'pos':'neg';
+const safe=n=>(isNaN(n)||n===null||n===undefined)?0:n;
+const r2=n=>{if(isNaN(n)||n===null||n===undefined)return 0;return Math.round(n*100)/100;}
 
 // ── PROXY FETCH ───────────────────────────────────────────────
 async function pfetch(url){
@@ -580,14 +581,16 @@ function calcMA(prices,p){
 
 // ── SIGNAL ────────────────────────────────────────────────────
 function getSig(pos){
-  const ret=((pos.currentPrice-pos.buyPrice)/pos.buyPrice)*100;
-  const day=pos.dayChange||0;
+  const cp=safe(pos.currentPrice);
+  const bp=safe(pos.buyPrice);
+  const ret=bp>0?r2((cp-bp)/bp*100):0;
+  const day=safe(pos.dayChange);
   const rsi=pos.rsi; const ma20=pos.ma20; const ma50=pos.ma50;
   let score=0,reasons=[],pills=[];
 
   // Goal / stoploss
-  if(pos.target&&pos.currentPrice>=pos.target){score+=2;reasons.push(`Doelkoers ${euro(pos.target)} bereikt!`);pills.push({l:'Doel bereikt',c:'bull'});}
-  if(pos.stoploss&&pos.currentPrice<=pos.stoploss){score-=3;reasons.push(`Stopverlies ${euro(pos.stoploss)} geraakt!`);pills.push({l:'Stopverlies!',c:'bear'});}
+  if(pos.target&&cp>=pos.target){score+=2;reasons.push(`Doelkoers ${euro(pos.target)} bereikt!`);pills.push({l:'Doel bereikt',c:'bull'});}
+  if(pos.stoploss&&cp<=pos.stoploss){score-=3;reasons.push(`Stopverlies ${euro(pos.stoploss)} geraakt!`);pills.push({l:'Stopverlies!',c:'bear'});}
 
   // RSI
   if(rsi!=null){
@@ -597,11 +600,11 @@ function getSig(pos){
   }
 
   // MA
-  if(ma20&&ma50){
-    if(pos.currentPrice>ma20&&pos.currentPrice>ma50){score+=1;pills.push({l:'Boven MA20/50',c:'bull'});}
-    else if(pos.currentPrice<ma20&&pos.currentPrice<ma50){score-=1;reasons.push('Onder beide MA');pills.push({l:'Onder MA20/50',c:'bear'});}
-    if(ma20>ma50) pills.push({l:'MA20>MA50',c:'bull'});
-    else if(ma20<ma50) pills.push({l:'MA20<MA50',c:'bear'});
+  if(pos.ma20&&pos.ma50){
+    if(cp>pos.ma20&&cp>pos.ma50){score+=1;pills.push({l:'Boven MA20/50',c:'bull'});}
+    else if(cp<pos.ma20&&cp<pos.ma50){score-=1;reasons.push('Onder beide MA');pills.push({l:'Onder MA20/50',c:'bear'});}
+    if(pos.ma20>pos.ma50) pills.push({l:'MA20>MA50',c:'bull'});
+    else if(pos.ma20<pos.ma50) pills.push({l:'MA20<MA50',c:'bear'});
   }
 
   if(ret<-15){score-=2;reasons.push(`Verlies ${pct(ret)}`);}
@@ -617,7 +620,7 @@ function getSig(pos){
   else if(score<=-3){label='Verkoopsignaal';cls='b-sell';}
   else if(score<=-1){label='Let op';cls='b-warn';}
   else{label='Neutraal';cls='b-hold';}
-  return{label,cls,reasons,pills,score};
+  return{label,cls,reasons,pills,score,ret,cp,bp};
 }
 
 // ── FETCH ALL ─────────────────────────────────────────────────
@@ -688,10 +691,14 @@ function renderTable(){
     return;
   }
   body.innerHTML=portfolio.map((pos,i)=>{
-    const val=pos.currentPrice*pos.shares;
-    const ret=val-pos.buyPrice*pos.shares;
-    const retP=((pos.currentPrice-pos.buyPrice)/pos.buyPrice)*100;
-    const day=pos.dayChange||0;
+    const cp=safe(pos.currentPrice);
+    const bp=safe(pos.buyPrice);
+    const sh=safe(pos.shares);
+    const val=r2(cp*sh);
+    const cost=r2(bp*sh);
+    const ret=r2(val-cost);
+    const retP=bp>0?r2((cp-bp)/bp*100):0;
+    const day=safe(pos.dayChange);
     const sig=getSig(pos);
     const rsi=pos.rsi;
     const curr=pos.currency&&pos.currency!=='EUR'?`<span style="font-size:10px;color:var(--faint);margin-left:3px;">${pos.currency}</span>`:'';
@@ -727,9 +734,9 @@ function renderTable(){
     const hasAlarm=alarms.some(a=>a.ticker===pos.ticker);
     return `<tr>
       <td><div class="tn">${pos.ticker}${curr}</div><div class="ts">${pos.name}</div></td>
-      <td class="mono">${euro(pos.currentPrice)}</td>
+      <td class="mono">${euro(cp)}</td>
       <td class="mono ${sc(day)}">${pct(day)}</td>
-      <td class="mono hm">${euro(pos.buyPrice)}</td>
+      <td class="mono hm">${euro(bp)}</td>
       <td class="mono hm">${euro(val)}</td>
       <td class="mono ${sc(ret)}">${pct(retP)}</td>
       <td>${goalHtml}</td>
@@ -744,12 +751,12 @@ function renderTable(){
 }
 
 function renderMetrics(){
-  const tv=portfolio.reduce((s,p)=>s+p.currentPrice*p.shares,0);
-  const tc=portfolio.reduce((s,p)=>s+p.buyPrice*p.shares,0);
-  const tr=tv-tc;const tp=tc>0?(tr/tc)*100:0;
-  const dp=portfolio.reduce((s,p)=>s+(p.dayChange||0)/100*p.currentPrice*p.shares,0);
-  const dpp=tv>0?(dp/tv)*100:0;
-  const divTotal=dividends.filter(d=>new Date(d.date).getFullYear()===new Date().getFullYear()).reduce((s,d)=>s+d.amount,0);
+  const tv=portfolio.reduce((s,p)=>s+safe(p.currentPrice)*safe(p.shares),0);
+  const tc=portfolio.reduce((s,p)=>s+safe(p.buyPrice)*safe(p.shares),0);
+  const tr=tv-tc;const tp=tc>0?r2((tr/tc)*100):0;
+  const dp=portfolio.reduce((s,p)=>s+safe(p.dayChange)/100*safe(p.currentPrice)*safe(p.shares),0);
+  const dpp=tv>0?r2((dp/tv)*100):0;
+  const divTotal=dividends.filter(d=>new Date(d.date).getFullYear()===new Date().getFullYear()).reduce((s,d)=>s+safe(d.amount),0);
 
   const set=(id,v,cls)=>{document.getElementById(id).textContent=v;if(cls)document.getElementById(id).className=cls;};
   set('mVal',euro(tv));
@@ -774,7 +781,7 @@ function renderSig(){
         <div class="sig-why">${sig.reasons.join(' · ')}</div>
         <div class="sig-pills">${pillsHtml||'<span class="pill">Nog geen RSI — klik Live bijwerken</span>'}</div>
         <div style="font-size:11px;color:var(--faint);font-family:var(--mono);margin-top:4px;">
-          ${euro(pos.currentPrice)} · aankoop ${euro(pos.buyPrice)}
+          ${euro(sig.cp)} · aankoop ${euro(sig.bp)}
           ${pos.target?`· doel ${euro(pos.target)}`:''}
           ${pos.stoploss?`· SL ${euro(pos.stoploss)}`:''}
           · score ${sig.score>0?'+':''}${sig.score}
@@ -1216,8 +1223,6 @@ function handleCSV(e){
     let added=0,skipped=0,divAdded=0,log=[];
 
     if(format==='t212pie'){
-      // Trading 212 Pie export
-      // Columns: Slice, Name, Invested value, Value, Result, Owned quantity, Dividends gained, Dividends cash, Dividends reinvested
       const iSlice=headers.indexOf('Slice');
       const iName=headers.indexOf('Name');
       const iInvested=headers.indexOf('Invested value');
@@ -1228,7 +1233,7 @@ function handleCSV(e){
       lines.slice(1).forEach(line=>{
         const p=parseCSVLine(line).map(s=>s.replace(/"/g,'').trim());
         const ticker=p[iSlice];
-        if(!ticker||ticker==='Total') return; // skip total row
+        if(!ticker||ticker==='Total') return;
 
         const name=p[iName]||ticker;
         const invested=parseFloat(p[iInvested]);
@@ -1237,21 +1242,27 @@ function handleCSV(e){
         const divCash=parseFloat(p[iDiv]);
 
         if(isNaN(qty)||qty<=0||isNaN(invested)){skipped++;return;}
-
-        const buyPrice=r2(invested/qty);
-        const currentPrice=r2(currentVal/qty);
-
         if(portfolio.some(pos=>pos.ticker===ticker.toUpperCase())){skipped++;return;}
 
+        // Bereken gemiddelde aankoopprijs en huidige koers per aandeel
+        // Voor fractional shares: gebruik de totaalwaarden gedeeld door aantal
+        const buyPrice=r2(invested/qty);
+        // currentPrice: gebruik T212 waarde als startpunt, wordt overschreven bij Live bijwerken
+        const currentPrice=(!isNaN(currentVal)&&currentVal>0)?r2(currentVal/qty):buyPrice;
+
         portfolio.push({
-          ticker:ticker.toUpperCase(),name,shares:qty,
-          buyPrice,currentPrice,dayChange:0,currency:'EUR',
+          ticker:ticker.toUpperCase(),name,
+          shares:qty,                    // fractional shares bewaard
+          buyPrice,                      // gemiddelde aankoopprijs per aandeel
+          currentPrice,                  // huidige prijs per aandeel (wordt overschreven door Yahoo)
+          t212invested:r2(invested),     // originele T212 geïnvesteerde waarde (referentie)
+          t212value:r2(currentVal)||r2(invested),
+          dayChange:0,currency:'EUR',
           rsi:null,ma20:null,ma50:null,target:null,stoploss:null,
           added:new Date().toISOString()
         });
         added++;
 
-        // Import dividend if available
         if(!isNaN(divCash)&&divCash>0){
           dividends.push({ticker:ticker.toUpperCase(),amount:r2(divCash),date:new Date().toISOString().split('T')[0],note:'Import Trading 212'});
           divAdded++;
